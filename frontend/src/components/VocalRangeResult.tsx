@@ -1,27 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import type { VocalRangeResult, SongRecommendation } from '../types';
 
 interface VocalRangeResultProps {
   result: VocalRangeResult;
   userId: number;
-}
-
-interface VocalRangeResult {
-  lowest_note_hz: number;
-  highest_note_hz: number;
-  lowest_note_name: string;
-  highest_note_name: string;
-  vocal_range_type: string;
-  confidence_score: number;
-}
-
-interface SongRecommendation {
-  id: number;
-  title: string;
-  artist: string;
-  genre: string;
-  compatibility_score: number;
-  key_adjustment: number;
-  original_key: string;
 }
 
 const VocalRangeResult: React.FC<VocalRangeResultProps> = ({ result, userId }) => {

@@ -1,17 +1,9 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
+import type { VocalRangeResult } from '../types';
 
 interface VoiceRecorderProps {
   onAnalysisComplete: (result: VocalRangeResult) => void;
   userId: number;
-}
-
-interface VocalRangeResult {
-  lowest_note_hz: number;
-  highest_note_hz: number;
-  lowest_note_name: string;
-  highest_note_name: string;
-  vocal_range_type: string;
-  confidence_score: number;
 }
 
 const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onAnalysisComplete, userId }) => {
