@@ -1,16 +1,8 @@
 import React, { useState } from 'react';
 import './App.css';
 import VoiceRecorder from './components/VoiceRecorder';
-import VocalRangeResultComponent from './components/VocalRangeResult';
-
-interface VocalRangeAnalysisResult {
-  lowest_note_hz: number;
-  highest_note_hz: number;
-  lowest_note_name: string;
-  highest_note_name: string;
-  vocal_range_type: string;
-  confidence_score: number;
-}
+import VocalRangeResult from './components/VocalRangeResult';
+import type { VocalRangeResult as VocalRangeAnalysisResult } from './types';
 
 function App() {
   const [currentUserId] = useState(1); // 임시 사용자 ID (추후 로그인 시스템으로 대체)
@@ -110,7 +102,7 @@ function App() {
         ) : (
           <div className="bg-white rounded-3xl shadow-lg border border-gray-200 overflow-hidden">
             <div className="p-8">
-              <VocalRangeResultComponent 
+              <VocalRangeResult 
                 result={vocalRangeResult}
                 userId={currentUserId}
               />
