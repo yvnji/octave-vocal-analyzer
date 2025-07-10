@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { VocalRangeResult, SongRecommendation } from '../types';
+import type { VocalRangeResult as VocalRangeData, SongRecommendation } from '../types';
 
 interface VocalRangeResultProps {
-  result: VocalRangeResult;
+  result: VocalRangeData;
   userId: number;
 }
 
