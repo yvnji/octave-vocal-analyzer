@@ -425,8 +425,9 @@ def get_vocal_history(user_id: int):
 
 if __name__ == "__main__":
     import uvicorn
+    print(f"🚀 Starting Octave API on {settings.API_HOST}:{settings.API_PORT}")
     uvicorn.run(
-        app, 
+        "main:app",  # 모듈:어플리케이션 형태로 변경
         host=settings.API_HOST, 
         port=settings.API_PORT, 
         reload=settings.API_RELOAD
