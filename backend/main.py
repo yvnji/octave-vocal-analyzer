@@ -132,6 +132,7 @@ def analyze_audio_pitch(audio_data, sr):
         raise HTTPException(status_code=400, detail=f"음성 분석 실패: {str(e)}")
 
 @app.get("/")
+@app.head("/")
 def read_root():
     return {"message": "🎵 Octave API가 실행 중입니다!", "version": "1.0.0"}
 
@@ -426,9 +427,12 @@ def get_vocal_history(user_id: int):
 if __name__ == "__main__":
     import uvicorn
     print(f"🚀 Starting Octave API on {settings.API_HOST}:{settings.API_PORT}")
+    print(f"🔧 Environment: {settings.ENV}")
+    print(f"🔧 Reload mode: {settings.API_RELOAD}")
     uvicorn.run(
-        "main:app",  # 모듈:어플리케이션 형태로 변경
+        "main:app",
         host=settings.API_HOST, 
         port=settings.API_PORT, 
-        reload=settings.API_RELOAD
+        reload=settings.API_RELOAD,
+        log_level="info"
     )
