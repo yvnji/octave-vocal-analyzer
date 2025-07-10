@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 
 interface VoiceRecorderProps {
   onAnalysisComplete: (result: VocalRangeResult) => void;
@@ -23,6 +23,77 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onAnalysisComplete, userI
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const uploadAndAnalyze = useCallback(async (audioBlob: Blob) => {
+    setIsAnalyzing(true);
+    
+    try {
+      console.log('Starting audio analysis...');
+      console.log('Audio blob size:', audioBlob.size, 'bytes');
+      console.log('Audio blob type:', audioBlob.type);
+
+      const formData = new FormData();
+      formData.append('audio_file', audioBlob, 'recording.webm');
+      formData.append('user_id', userId.toString());
+
+      // 환경변수 또는 기본값 사용
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+      const endpoint = `${apiUrl}/analyze-vocal-range`;
+      
+      console.log('Sending request to:', endpoint);
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        body: formData,
+      });
+
+      console.log('Response status:', response.status);
+      console.log('Response headers:', response.headers);
+
+      if (!response.ok) {
+        let errorMessage = '음성 분석에 실패했습니다.';
+        
+        try {
+          const errorData = await response.json();
+          console.error('Server error response:', errorData);
+          errorMessage = errorData.detail || errorData.message || errorMessage;
+        } catch (jsonError) {
+          console.error('Failed to parse error response as JSON:', jsonError);
+          const errorText = await response.text();
+          console.error('Error response text:', errorText);
+          
+          if (response.status === 404) {
+            errorMessage = '백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.';
+          } else if (response.status === 500) {
+            errorMessage = '서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+          } else {
+            errorMessage = `HTTP ${response.status}: ${errorText || '알 수 없는 오류가 발생했습니다.'}`;
+          }
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      const result: VocalRangeResult = await response.json();
+      console.log('Analysis result:', result);
+      onAnalysisComplete(result);
+      
+    } catch (err) {
+      console.error('Analysis error details:', err);
+      
+      let userFriendlyMessage = '음성 분석 중 오류가 발생했습니다.';
+      
+      if (err instanceof TypeError && err.message.includes('fetch')) {
+        userFriendlyMessage = '백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.';
+      } else if (err instanceof Error) {
+        userFriendlyMessage = err.message;
+      }
+      
+      setError(userFriendlyMessage);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [userId, onAnalysisComplete]);
 
   const startRecording = useCallback(async () => {
     try {
@@ -132,7 +203,7 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onAnalysisComplete, userI
       console.error('Recording error:', err);
       setError('마이크 접근 권한이 필요합니다. 브라우저 설정을 확인해주세요.');
     }
-  }, []);
+  }, [uploadAndAnalyze]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {
@@ -145,77 +216,6 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onAnalysisComplete, userI
       }
     }
   }, [isRecording]);
-
-  const uploadAndAnalyze = async (audioBlob: Blob) => {
-    setIsAnalyzing(true);
-    
-    try {
-      console.log('Starting audio analysis...');
-      console.log('Audio blob size:', audioBlob.size, 'bytes');
-      console.log('Audio blob type:', audioBlob.type);
-
-      const formData = new FormData();
-      formData.append('audio_file', audioBlob, 'recording.webm');
-      formData.append('user_id', userId.toString());
-
-      // 환경변수 또는 기본값 사용
-      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-      const endpoint = `${apiUrl}/analyze-vocal-range`;
-      
-      console.log('Sending request to:', endpoint);
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        body: formData,
-      });
-
-      console.log('Response status:', response.status);
-      console.log('Response headers:', response.headers);
-
-      if (!response.ok) {
-        let errorMessage = '음성 분석에 실패했습니다.';
-        
-        try {
-          const errorData = await response.json();
-          console.error('Server error response:', errorData);
-          errorMessage = errorData.detail || errorData.message || errorMessage;
-        } catch (jsonError) {
-          console.error('Failed to parse error response as JSON:', jsonError);
-          const errorText = await response.text();
-          console.error('Error response text:', errorText);
-          
-          if (response.status === 404) {
-            errorMessage = '백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.';
-          } else if (response.status === 500) {
-            errorMessage = '서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
-          } else {
-            errorMessage = `HTTP ${response.status}: ${errorText || '알 수 없는 오류가 발생했습니다.'}`;
-          }
-        }
-        
-        throw new Error(errorMessage);
-      }
-
-      const result: VocalRangeResult = await response.json();
-      console.log('Analysis result:', result);
-      onAnalysisComplete(result);
-      
-    } catch (err) {
-      console.error('Analysis error details:', err);
-      
-      let userFriendlyMessage = '음성 분석 중 오류가 발생했습니다.';
-      
-      if (err instanceof TypeError && err.message.includes('fetch')) {
-        userFriendlyMessage = '백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.';
-      } else if (err instanceof Error) {
-        userFriendlyMessage = err.message;
-      }
-      
-      setError(userFriendlyMessage);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);

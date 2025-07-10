@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 interface VocalRangeResultProps {
   result: VocalRangeResult;
@@ -28,11 +28,7 @@ const VocalRangeResult: React.FC<VocalRangeResultProps> = ({ result, userId }) =
   const [recommendations, setRecommendations] = useState<SongRecommendation[]>([]);
   const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(true);
 
-  useEffect(() => {
-    fetchRecommendations();
-  }, [userId]);
-
-  const fetchRecommendations = async () => {
+  const fetchRecommendations = useCallback(async () => {
     try {
       const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
       const response = await fetch(`${apiUrl}/users/${userId}/song-recommendations`);
@@ -45,7 +41,11 @@ const VocalRangeResult: React.FC<VocalRangeResultProps> = ({ result, userId }) =
     } finally {
       setIsLoadingRecommendations(false);
     }
-  };
+  }, [userId]);
+
+  useEffect(() => {
+    fetchRecommendations();
+  }, [fetchRecommendations]);
 
   const getVocalTypeColor = (type: string) => {
     const colors = {
