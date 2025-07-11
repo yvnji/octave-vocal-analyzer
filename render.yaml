@@ -14,4 +14,6 @@ services:
       - key: DEBUG
         value: false
       - key: API_RELOAD
-        value: false 
+        value: false
+      - key: FRONTEND_URL
+        value: https://octave-ai.netlify.app 

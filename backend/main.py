@@ -12,11 +12,11 @@ from config import settings
 
 app = FastAPI(title="Octave - 음역대 분석 API", version="1.0.0")
 
-# CORS 설정
+# CORS 설정 - 개발 환경에서는 모든 origin 허용
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"] if settings.ENV == "dev" else settings.ALLOWED_ORIGINS,
+    allow_credentials=False if settings.ENV == "dev" else True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -179,7 +179,12 @@ def analyze_audio_pitch(audio_data, sr):
 @app.get("/")
 @app.head("/")
 def read_root():
-    return {"message": "🎵 Octave API가 실행 중입니다!", "version": "1.0.0"}
+    return {"message": "🎵 Octave API가 실행 중입니다!", "version": "1.0.0", "status": "healthy"}
+
+@app.get("/health")
+@app.head("/health")
+def health_check():
+    return {"status": "healthy", "service": "octave-api"}
 
 @app.post("/users", response_model=dict)
 def create_user(user: User):

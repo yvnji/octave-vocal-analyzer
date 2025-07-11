@@ -44,7 +44,9 @@ class Settings:
         self.ALLOWED_ORIGINS = [
             self.FRONTEND_URL,
             "http://localhost:3000",
-            "http://127.0.0.1:3000"
+            "http://127.0.0.1:3000",
+            "https://octave-ai.netlify.app",  # Netlify 프론트엔드
+            "https://*.netlify.app"  # 모든 Netlify 도메인
         ]
         
         # 보안 설정
