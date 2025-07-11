@@ -1,11 +1,6 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
-librosa==0.10.1
-numpy>=1.21.0,<1.25.0
 psycopg2-binary==2.9.7
 python-dotenv==1.0.0
-pydantic==2.5.0
-sqlalchemy==2.0.23
-setuptools>=65.0.0
-wheel>=0.37.0 
+pydantic==2.5.0 
