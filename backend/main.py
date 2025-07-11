@@ -6,6 +6,7 @@ import psycopg2.extras
 import librosa
 import numpy as np
 import io
+import os
 from typing import List, Optional
 from config import settings
 
@@ -19,6 +20,50 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def init_database():
+    """데이터베이스 테이블 초기화"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # schema.sql 파일 읽기
+        schema_path = os.path.join(os.path.dirname(__file__), 'database', 'schema.sql')
+        with open(schema_path, 'r', encoding='utf-8') as f:
+            schema_sql = f.read()
+        
+        # CREATE DATABASE 명령어 제거 (이미 데이터베이스가 존재)
+        schema_lines = schema_sql.split('\n')
+        filtered_lines = []
+        for line in schema_lines:
+            if not line.strip().startswith('CREATE DATABASE'):
+                filtered_lines.append(line)
+        
+        schema_sql = '\n'.join(filtered_lines)
+        
+        # 스키마 실행
+        cur.execute(schema_sql)
+        conn.commit()
+        print("✅ Database schema initialized successfully")
+        
+    except psycopg2.errors.DuplicateTable:
+        print("ℹ️ Database tables already exist")
+    except FileNotFoundError:
+        print("⚠️ Schema file not found, skipping database initialization")
+    except Exception as e:
+        print(f"❌ Database initialization failed: {e}")
+    finally:
+        try:
+            cur.close()
+            conn.close()
+        except:
+            pass
+
+# 앱 시작 시 데이터베이스 초기화
+@app.on_event("startup")
+async def startup_event():
+    print("🚀 Starting Octave API...")
+    init_database()
 
 def get_db_connection():
     conn = psycopg2.connect(
