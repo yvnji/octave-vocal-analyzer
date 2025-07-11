@@ -15,22 +15,20 @@ from typing import List, Optional, Dict, Any, cast
 from config import settings
 
 # Librosa 초기화 (JIT 컴파일 문제 해결)
-print("🔧 Librosa 초기화 중...")
 try:
-    # numba 경고 무시
     warnings.filterwarnings('ignore', category=UserWarning, module='numba')
     warnings.filterwarnings('ignore', category=FutureWarning, module='librosa')
     
     # librosa JIT 컴파일 문제 해결을 위한 더미 호출
     dummy_audio = np.sin(2 * np.pi * 440 * np.linspace(0, 1, 22050))
     _ = librosa.piptrack(y=dummy_audio, sr=22050, threshold=0.1)
-    print("✅ Librosa 초기화 완료")
+    print("✅ Librosa initialized")
 except Exception as e:
-    print(f"⚠️ Librosa 초기화 경고: {e}")
+    print(f"⚠️ Librosa init warning: {e}")
 
 app = FastAPI(title="Octave - 음역대 분석 API", version="1.0.0")
 
-# CORS 설정 - 개발 환경에서는 모든 origin 허용
+# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if settings.ENV == "dev" else settings.ALLOWED_ORIGINS,
@@ -52,31 +50,25 @@ def init_database():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # schema.sql 파일 읽기
         schema_path = os.path.join(os.path.dirname(__file__), 'database', 'schema.sql')
         with open(schema_path, 'r', encoding='utf-8') as f:
             schema_sql = f.read()
         
-        # CREATE DATABASE 명령어 제거 (이미 데이터베이스가 존재)
+        # CREATE DATABASE 명령어 제거
         schema_lines = schema_sql.split('\n')
-        filtered_lines = []
-        for line in schema_lines:
-            if not line.strip().startswith('CREATE DATABASE'):
-                filtered_lines.append(line)
-        
+        filtered_lines = [line for line in schema_lines if not line.strip().startswith('CREATE DATABASE')]
         schema_sql = '\n'.join(filtered_lines)
         
-        # 스키마 실행
         cur.execute(schema_sql)
         conn.commit()
-        print("✅ Database schema initialized successfully")
+        print("✅ Database initialized")
         
     except psycopg2.errors.DuplicateTable:
         print("ℹ️ Database tables already exist")
     except FileNotFoundError:
-        print("⚠️ Schema file not found, skipping database initialization")
+        print("⚠️ Schema file not found")
     except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
+        print(f"❌ Database init failed: {e}")
     finally:
         try:
             cur.close()
@@ -84,7 +76,6 @@ def init_database():
         except:
             pass
 
-# 앱 시작 시 데이터베이스 초기화
 @app.on_event("startup")
 async def startup_event():
     print("🚀 Starting Octave API...")
@@ -98,7 +89,7 @@ def get_db_connection():
         user=settings.DB_USER,
         password=settings.DB_PASSWORD,
         cursor_factory=psycopg2.extras.RealDictCursor,
-        connect_timeout=10  # 10초 연결 타임아웃
+        connect_timeout=10
     )
     return conn
 
@@ -174,201 +165,80 @@ def classify_vocal_range(lowest_hz, highest_hz):
     
     return best_match
 
-def safe_librosa_load(audio_path_or_bytes, sr=22050):
-    """안전한 librosa 로딩 (여러 방법 시도)"""
-    print(f"🔄 안전한 오디오 로딩 시도...")
-    
-    # 방법 1: 직접 librosa로 로딩
+def load_audio_file(audio_path_or_bytes, sr=22050):
+    """오디오 파일 로딩 (librosa 또는 FFmpeg 사용)"""
     try:
+        # 직접 librosa로 로딩 시도
         if isinstance(audio_path_or_bytes, (str, os.PathLike)):
-            print("📁 파일 경로로 로딩 시도...")
             audio_data, actual_sr = librosa.load(audio_path_or_bytes, sr=sr)
         else:
-            print("📦 바이트 스트림으로 로딩 시도...")
             audio_data, actual_sr = librosa.load(audio_path_or_bytes, sr=sr)
-        print(f"✅ 직접 로딩 성공 - 샘플 레이트: {actual_sr}, 길이: {len(audio_data)}")
         return audio_data, actual_sr
-    except Exception as e1:
-        print(f"❌ 직접 로딩 실패: {e1}")
-        
-        # 방법 2: soundfile로 로딩 후 librosa로 리샘플링
-        try:
-            import soundfile as sf
-            print("🔄 soundfile로 로딩 시도...")
-            
-            if isinstance(audio_path_or_bytes, (str, os.PathLike)):
-                audio_data, actual_sr = sf.read(audio_path_or_bytes)
-            else:
-                audio_data, actual_sr = sf.read(audio_path_or_bytes)
-            
-            # 리샘플링 (librosa 없이)
-            if actual_sr != sr:
-                print(f"🔄 리샘플링: {actual_sr}Hz -> {sr}Hz")
-                audio_data = librosa.resample(audio_data, orig_sr=actual_sr, target_sr=sr)
-                actual_sr = sr
-                
-            print(f"✅ soundfile 로딩 성공 - 샘플 레이트: {actual_sr}, 길이: {len(audio_data)}")
-            return audio_data, actual_sr
-        except Exception as e2:
-            print(f"❌ soundfile 로딩 실패: {e2}")
-            
-            # 방법 3: scipy로 로딩
-            try:
-                from scipy.io import wavfile
-                print("🔄 scipy.wavfile로 로딩 시도...")
-                
-                if isinstance(audio_path_or_bytes, (str, os.PathLike)):
-                    actual_sr, audio_data = wavfile.read(audio_path_or_bytes)
-                    # int16을 float32로 변환
-                    if audio_data.dtype == np.int16:
-                        audio_data = audio_data.astype(np.float32) / 32768.0
-                    elif audio_data.dtype == np.int32:
-                        audio_data = audio_data.astype(np.float32) / 2147483648.0
-                        
-                    # 리샘플링
-                    if actual_sr != sr:
-                        print(f"🔄 리샘플링: {actual_sr}Hz -> {sr}Hz")
-                        audio_data = librosa.resample(audio_data, orig_sr=actual_sr, target_sr=sr)
-                        actual_sr = sr
-                        
-                    print(f"✅ scipy 로딩 성공 - 샘플 레이트: {actual_sr}, 길이: {len(audio_data)}")
-                    return audio_data, actual_sr
-                else:
-                    raise ValueError("scipy는 바이트 스트림을 지원하지 않습니다")
-                    
-            except Exception as e3:
-                print(f"❌ scipy 로딩 실패: {e3}")
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"오디오 파일을 로드할 수 없습니다. 지원되는 형식인지 확인해주세요. 오류: {str(e1)}"
-                )
+    except Exception:
+        # 바이트 스트림은 FFmpeg 변환 필요
+        raise HTTPException(
+            status_code=400, 
+            detail="오디오 파일을 로드할 수 없습니다. FFmpeg 변환이 필요합니다."
+        )
 
 def analyze_audio_pitch(audio_data, sr):
     """오디오에서 피치 분석하여 최고음/최저음 추출"""
     try:
-        print(f"🎵 피치 분석 시작 - 샘플 레이트: {sr}, 데이터 길이: {len(audio_data)}")
-        
         # 오디오 길이 제한 (최대 60초)
-        max_duration = 60.0  # 초
-        max_samples = int(max_duration * sr)
-        
+        max_samples = int(60.0 * sr)
         if len(audio_data) > max_samples:
-            print(f"⚠️ 오디오가 너무 깁니다. {len(audio_data)/sr:.1f}초 -> {max_duration}초로 자릅니다")
             audio_data = audio_data[:max_samples]
         
-        actual_duration = len(audio_data) / sr
-        print(f"📏 분석할 오디오 길이: {actual_duration:.1f}초")
-        
-        # 음성 분석을 위한 전처리
-        # 1. 무음 구간 제거 (더 정확한 피치 분석을 위해)
-        print("🔇 무음 구간 제거 중...")
+        # 무음 구간 제거
         try:
             non_silent_intervals = librosa.effects.split(audio_data, top_db=20)
             if len(non_silent_intervals) == 0:
-                raise ValueError("오디오에서 음성을 찾을 수 없습니다. 무음 파일이거나 볼륨이 너무 작습니다.")
-        except Exception as split_error:
-            print(f"⚠️ 무음 제거 실패, 건너뛰기: {split_error}")
+                raise ValueError("오디오에서 음성을 찾을 수 없습니다.")
+        except Exception:
+            pass  # 무음 제거 실패시 무시하고 계속
         
-        # 2. 피치 추출 (더 가벼운 방법 사용)
-        print("🎼 피치 추출 중...")
+        # 피치 추출
+        pitches, magnitudes = librosa.piptrack(
+            y=audio_data, 
+            sr=sr, 
+            threshold=max(settings.PITCH_THRESHOLD, 0.2),
+            hop_length=512,
+            fmin=80.0,
+            fmax=2000.0
+        )
         
-        # hop_length를 크게 하여 처리 속도 향상
-        hop_length = 512
-        frame_length = 2048
-        
-        # 더 빠른 피치 추출을 위해 threshold 높임
-        try:
-            pitches, magnitudes = librosa.piptrack(
-                y=audio_data, 
-                sr=sr, 
-                threshold=max(settings.PITCH_THRESHOLD, 0.2),  # 최소 0.2 이상
-                hop_length=hop_length,
-                fmin=80.0,  # 최저 주파수 제한 (인간 음성 범위)
-                fmax=2000.0  # 최고 주파수 제한
-            )
-        except Exception as piptrack_error:
-            print(f"❌ piptrack 실패: {piptrack_error}")
-            # 대안 방법: yin 알고리즘 사용
-            try:
-                print("🔄 YIN 알고리즘으로 피치 추출 시도...")
-                f0 = librosa.yin(audio_data, fmin=80, fmax=2000, sr=sr, hop_length=hop_length)
-                # 유효한 피치만 필터링
-                valid_f0 = f0[f0 > 0]
-                if len(valid_f0) < 10:
-                    raise ValueError("YIN으로도 충분한 피치를 찾을 수 없습니다")
-                
-                pitch_values = valid_f0.tolist()
-                print(f"✅ YIN으로 {len(pitch_values)}개 피치 추출 완료")
-                
-                # 극값 제거
-                pitch_values = sorted(pitch_values)
-                trim_count = max(1, len(pitch_values) // 20)
-                pitch_values = pitch_values[trim_count:-trim_count] if len(pitch_values) > trim_count * 2 else pitch_values
-                
-                lowest_hz = min(pitch_values)
-                highest_hz = max(pitch_values)
-                confidence = min(1.0, len(pitch_values) / len(f0))
-                
-                print(f"🎵 YIN 분석 결과: {lowest_hz:.1f}Hz ~ {highest_hz:.1f}Hz (신뢰도: {confidence:.2f})")
-                return lowest_hz, highest_hz, confidence
-                
-            except Exception as yin_error:
-                print(f"❌ YIN 알고리즘도 실패: {yin_error}")
-                raise ValueError("모든 피치 추출 방법이 실패했습니다. 더 선명한 음성으로 시도해주세요.")
-        
-        print(f"📊 피치 데이터 크기: {pitches.shape}")
-        
-        # 신뢰할 만한 피치만 추출 (최적화)
-        print("🔍 유효한 피치 추출 중...")
+        # 유효한 피치만 추출
         pitch_values = []
-        
-        # 모든 시간 프레임이 아닌 일정 간격으로 샘플링하여 속도 향상
-        time_step = max(1, pitches.shape[1] // 1000)  # 최대 1000개 포인트만 분석
+        time_step = max(1, pitches.shape[1] // 1000)
         
         for t in range(0, pitches.shape[1], time_step):
             if t >= pitches.shape[1]:
                 break
                 
-            # 각 시간 프레임에서 가장 강한 주파수 찾기
             magnitude_column = magnitudes[:, t]
             if magnitude_column.max() > 0:
                 index = magnitude_column.argmax()
                 pitch = pitches[index, t]
                 
-                # 유효한 피치 범위 체크 (인간 음성 범위)
                 if 80.0 <= pitch <= 2000.0:
                     pitch_values.append(pitch)
         
-        print(f"✅ 추출된 유효 피치 개수: {len(pitch_values)}")
+        if len(pitch_values) < 10:
+            raise ValueError("충분한 음성 데이터를 찾을 수 없습니다.")
         
-        if len(pitch_values) < 10:  # 최소 10개 이상의 피치가 필요
-            raise ValueError("충분한 음성 데이터를 찾을 수 없습니다. 더 선명하게 노래해주세요.")
-        
-        # 극값 제거 (노이즈 제거를 위해)
+        # 극값 제거 (상위/하위 5%)
         pitch_values = sorted(pitch_values)
-        # 상위/하위 5% 제거
         trim_count = max(1, len(pitch_values) // 20)
-        pitch_values = pitch_values[trim_count:-trim_count] if len(pitch_values) > trim_count * 2 else pitch_values
+        if len(pitch_values) > trim_count * 2:
+            pitch_values = pitch_values[trim_count:-trim_count]
         
         lowest_hz = min(pitch_values)
         highest_hz = max(pitch_values)
-        
-        print(f"🎵 분석 결과: {lowest_hz:.1f}Hz ~ {highest_hz:.1f}Hz")
-        
-        # 신뢰도 계산 (검출된 피치의 비율)
-        total_frames = pitches.shape[1]
-        confidence = min(1.0, len(pitch_values) / (total_frames / time_step))
-        
-        print(f"📈 신뢰도: {confidence:.2f}")
-        
-        # 신뢰도가 너무 낮으면 경고
-        if confidence < 0.3:
-            print(f"⚠️ 신뢰도가 낮습니다 ({confidence:.2f}). 결과가 부정확할 수 있습니다.")
+        confidence = min(1.0, len(pitch_values) / (pitches.shape[1] / time_step))
         
         return lowest_hz, highest_hz, confidence
         
     except Exception as e:
-        print(f"❌ 피치 분석 실패: {str(e)}")
         raise HTTPException(status_code=400, detail=f"음성 분석 실패: {str(e)}")
 
 @app.get("/")
@@ -418,75 +288,50 @@ async def analyze_vocal_range(
 ):
     """업로드된 오디오 파일에서 음역대 분석"""
     
-    print("=== 받은 파일 정보 ===")
-    print(f"파일명: {audio_file.filename}")
-    print(f"Content-Type: {audio_file.content_type}")
-    print(f"User ID: {user_id}")
-    
     if not audio_file.content_type:
-        print("❌ Content-Type이 없습니다!")
         raise HTTPException(status_code=400, detail="파일의 Content-Type을 확인할 수 없습니다.")
     
-    # Content-Type에서 기본 MIME 타입만 추출 (코덱 정보 제거)
+    # Content-Type 체크
     base_content_type = audio_file.content_type.split(';')[0].strip()
-    print(f"기본 MIME 타입: {base_content_type}")
-    
     if base_content_type not in settings.ALLOWED_AUDIO_FORMATS:
-        print(f"❌ 지원되지 않는 파일 형식: {base_content_type}")
         raise HTTPException(
             status_code=400, 
-            detail=f"지원되지 않는 파일 형식입니다. 현재: {base_content_type}, 허용 형식: {', '.join(settings.ALLOWED_AUDIO_FORMATS)}"
+            detail=f"지원되지 않는 파일 형식입니다. 허용 형식: {', '.join(settings.ALLOWED_AUDIO_FORMATS)}"
         )
     
     try:
-        # 오디오 파일 읽기
+        # 파일 읽기
         audio_bytes = await audio_file.read()
-        print(f"실제 파일 크기: {len(audio_bytes)} bytes")
-        print(f"파일 크기 (MB): {len(audio_bytes) / 1024 / 1024:.2f}")
         
-        # 파일 크기 제한 체크
+        # 파일 크기 체크
         if len(audio_bytes) > settings.MAX_FILE_SIZE_BYTES:
             raise HTTPException(
                 status_code=413, 
-                detail=f"파일 크기가 너무 큽니다. 최대 {settings.MAX_FILE_SIZE_MB}MB까지 허용됩니다."
+                detail=f"파일 크기가 너무 큽니다. 최대 {settings.MAX_FILE_SIZE_MB}MB"
             )
         
         if len(audio_bytes) == 0:
-            print("❌ 파일이 비어있습니다!")
             raise HTTPException(status_code=400, detail="업로드된 파일이 비어있습니다.")
-        
-        if len(audio_bytes) < 1000:
-            print("⚠️ 파일 크기가 매우 작습니다. 올바른 오디오 파일인지 확인이 필요합니다.")
         
         # 타임아웃 설정 (60초)
         signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(60)
         
         try:
-            print("=== Librosa 로딩 시도 ===")
-            # mp3, wav -> librosa로 로딩 (샘플 레이트 제한)
-            audio_data, sr = safe_librosa_load(io.BytesIO(audio_bytes), sr=22050)
-            print(f"✅ Librosa 로딩 성공 - 샘플 레이트: {sr}, 데이터 길이: {len(audio_data)}")
+            # 오디오 로딩 시도
+            audio_data, sr = load_audio_file(io.BytesIO(audio_bytes), sr=22050)
             
             # 오디오 길이 체크
             duration = len(audio_data) / sr
-            print(f"📏 오디오 길이: {duration:.1f}초")
-            
             if duration < 1.0:
-                raise HTTPException(status_code=400, detail="오디오가 너무 짧습니다. 최소 1초 이상의 음성이 필요합니다.")
-            
-            if duration > 120.0:  # 2분 초과시 경고
-                print(f"⚠️ 긴 오디오 파일입니다 ({duration:.1f}초). 처리 시간이 오래 걸릴 수 있습니다.")
+                raise HTTPException(status_code=400, detail="오디오가 너무 짧습니다. 최소 1초 이상 필요합니다.")
                 
-        except Exception as load_error:
-            print(f"❌ Librosa 로딩 실패: {load_error}")
-            print("=== FFmpeg 변환 시도 ===")
-            
+        except HTTPException:
+            # FFmpeg 변환 시도
             temp_input_path = None
             temp_output_path = None
             
             try:
-                # 임시 파일 생성
                 with tempfile.NamedTemporaryFile(suffix='.tmp', delete=False) as temp_input:
                     temp_input.write(audio_bytes)
                     temp_input_path = temp_input.name
@@ -494,85 +339,51 @@ async def analyze_vocal_range(
                 with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_output:
                     temp_output_path = temp_output.name
                 
-                print(f"FFmpeg 명령어: {settings.FFMPEG_PATH} -i {temp_input_path} -ar 22050 -ac 1 {temp_output_path} -y")
-                
-                # FFmpeg로 wav 변환 (타임아웃 30초)
-                result = subprocess.run([
+                # FFmpeg 변환
+                subprocess.run([
                     settings.FFMPEG_PATH, '-i', temp_input_path, 
-                    '-ar', '22050', '-ac', '1',  # 모노, 22050Hz로 통일
-                    '-t', '120',  # 최대 2분으로 제한
+                    '-ar', '22050', '-ac', '1', '-t', '120',
                     temp_output_path, '-y'
                 ], check=True, capture_output=True, text=True, timeout=30)
                 
-                print(f"✅ FFmpeg 변환 성공")
+                # 변환된 파일 로딩
+                audio_data, sr = load_audio_file(temp_output_path, sr=22050)
                 
-                # 변환된 파일 로딩 (안전한 방법 사용)
-                audio_data, sr = safe_librosa_load(temp_output_path, sr=22050)
-                print(f"✅ 변환된 파일 로딩 성공 - 샘플 레이트: {sr}, 데이터 길이: {len(audio_data)}")
-                
-                # 오디오 길이 체크
                 duration = len(audio_data) / sr
-                print(f"📏 변환된 오디오 길이: {duration:.1f}초")
-                
                 if duration < 1.0:
                     raise HTTPException(status_code=400, detail="변환된 오디오가 너무 짧습니다.")
                 
             except subprocess.TimeoutExpired:
-                print("❌ FFmpeg 변환 타임아웃")
-                raise HTTPException(status_code=408, detail="오디오 파일 변환 시간이 초과되었습니다")
-            except subprocess.CalledProcessError as ffmpeg_error:
-                print(f"❌ FFmpeg 변환 실패: {ffmpeg_error}")
-                print(f"FFmpeg stderr: {ffmpeg_error.stderr}")
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"오디오 파일 변환에 실패했습니다: {str(ffmpeg_error)}"
-                )
-            except Exception as ffmpeg_load_error:
-                print(f"❌ 변환된 파일 로딩 실패: {ffmpeg_load_error}")
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"변환된 오디오 파일을 로드할 수 없습니다: {str(ffmpeg_load_error)}"
-                )
+                raise HTTPException(status_code=408, detail="오디오 파일 변환 시간 초과")
+            except subprocess.CalledProcessError as e:
+                raise HTTPException(status_code=400, detail="오디오 파일 변환 실패")
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"오디오 처리 실패: {str(e)}")
             finally:
                 # 임시 파일 정리
-                if temp_input_path and os.path.exists(temp_input_path):
-                    try:
-                        os.unlink(temp_input_path)
-                    except:
-                        pass
-                if temp_output_path and os.path.exists(temp_output_path):
-                    try:
-                        os.unlink(temp_output_path)
-                    except:
-                        pass
+                for path in [temp_input_path, temp_output_path]:
+                    if path and os.path.exists(path):
+                        try:
+                            os.unlink(path)
+                        except:
+                            pass
         
-        # 타임아웃 해제
-        signal.alarm(0)
-        
-        # 피치 분석 (타임아웃 설정)
-        print("🎼 피치 분석 시작...")
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(30)  # 피치 분석에 30초 타임아웃
-        
+        # 피치 분석
+        signal.alarm(30)  # 피치 분석 타임아웃
         try:
             lowest_hz, highest_hz, confidence = analyze_audio_pitch(audio_data, sr)
         finally:
-            signal.alarm(0)  # 타임아웃 해제
-        
-        print(f"✅ 피치 분석 완료: {lowest_hz:.1f}Hz ~ {highest_hz:.1f}Hz (신뢰도: {confidence:.2f})")
+            signal.alarm(0)
         
         # 음표명 변환
         lowest_note = hz_to_note(lowest_hz)
         highest_note = hz_to_note(highest_hz)
-        
-        # 성부 분류
         vocal_type = classify_vocal_range(lowest_hz, highest_hz)
         
         # 데이터베이스에 저장
         conn = get_db_connection()
         try:
             cur = conn.cursor()
-            
             cur.execute("""
                 INSERT INTO vocal_range_sessions 
                 (user_id, lowest_note_hz, highest_note_hz, lowest_note_name, 
@@ -584,17 +395,14 @@ async def analyze_vocal_range(
             
             result = cur.fetchone()
             if result is None:
-                raise HTTPException(status_code=500, detail="음역대 데이터 저장에 실패했습니다")
+                raise HTTPException(status_code=500, detail="데이터 저장 실패")
             
             result_dict = cast(Dict[str, Any], result)
             session_id = result_dict['id']
             conn.commit()
             
-            print(f"✅ 분석 완료 - Session ID: {session_id}")
-            
         except Exception as db_error:
-            print(f"❌ 데이터베이스 저장 실패: {db_error}")
-            raise HTTPException(status_code=500, detail=f"데이터베이스 저장 실패: {str(db_error)}")
+            raise HTTPException(status_code=500, detail=f"데이터베이스 오류: {str(db_error)}")
         finally:
             try:
                 cur.close()
@@ -612,13 +420,12 @@ async def analyze_vocal_range(
         )
         
     except TimeoutError:
-        print("❌ 처리 시간 초과")
-        raise HTTPException(status_code=408, detail="음성 분석 시간이 초과되었습니다")
+        raise HTTPException(status_code=408, detail="처리 시간 초과")
+    except HTTPException:
+        raise  # HTTPException은 그대로 전달
     except Exception as e:
-        print(f"❌ 예상치 못한 오류: {str(e)}")
         raise HTTPException(status_code=500, detail=f"분석 실패: {str(e)}")
     finally:
-        # 타임아웃 해제
         signal.alarm(0)
 
 @app.get("/users/{user_id}/song-recommendations", response_model=List[SongRecommendation])
