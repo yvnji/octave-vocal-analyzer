@@ -10,8 +10,23 @@ import os
 import signal
 import subprocess
 import tempfile
+import warnings
 from typing import List, Optional, Dict, Any, cast
 from config import settings
+
+# Librosa 초기화 (JIT 컴파일 문제 해결)
+print("🔧 Librosa 초기화 중...")
+try:
+    # numba 경고 무시
+    warnings.filterwarnings('ignore', category=UserWarning, module='numba')
+    warnings.filterwarnings('ignore', category=FutureWarning, module='librosa')
+    
+    # librosa JIT 컴파일 문제 해결을 위한 더미 호출
+    dummy_audio = np.sin(2 * np.pi * 440 * np.linspace(0, 1, 22050))
+    _ = librosa.piptrack(y=dummy_audio, sr=22050, threshold=0.1)
+    print("✅ Librosa 초기화 완료")
+except Exception as e:
+    print(f"⚠️ Librosa 초기화 경고: {e}")
 
 app = FastAPI(title="Octave - 음역대 분석 API", version="1.0.0")
 
@@ -159,6 +174,75 @@ def classify_vocal_range(lowest_hz, highest_hz):
     
     return best_match
 
+def safe_librosa_load(audio_path_or_bytes, sr=22050):
+    """안전한 librosa 로딩 (여러 방법 시도)"""
+    print(f"🔄 안전한 오디오 로딩 시도...")
+    
+    # 방법 1: 직접 librosa로 로딩
+    try:
+        if isinstance(audio_path_or_bytes, (str, os.PathLike)):
+            print("📁 파일 경로로 로딩 시도...")
+            audio_data, actual_sr = librosa.load(audio_path_or_bytes, sr=sr)
+        else:
+            print("📦 바이트 스트림으로 로딩 시도...")
+            audio_data, actual_sr = librosa.load(audio_path_or_bytes, sr=sr)
+        print(f"✅ 직접 로딩 성공 - 샘플 레이트: {actual_sr}, 길이: {len(audio_data)}")
+        return audio_data, actual_sr
+    except Exception as e1:
+        print(f"❌ 직접 로딩 실패: {e1}")
+        
+        # 방법 2: soundfile로 로딩 후 librosa로 리샘플링
+        try:
+            import soundfile as sf
+            print("🔄 soundfile로 로딩 시도...")
+            
+            if isinstance(audio_path_or_bytes, (str, os.PathLike)):
+                audio_data, actual_sr = sf.read(audio_path_or_bytes)
+            else:
+                audio_data, actual_sr = sf.read(audio_path_or_bytes)
+            
+            # 리샘플링 (librosa 없이)
+            if actual_sr != sr:
+                print(f"🔄 리샘플링: {actual_sr}Hz -> {sr}Hz")
+                audio_data = librosa.resample(audio_data, orig_sr=actual_sr, target_sr=sr)
+                actual_sr = sr
+                
+            print(f"✅ soundfile 로딩 성공 - 샘플 레이트: {actual_sr}, 길이: {len(audio_data)}")
+            return audio_data, actual_sr
+        except Exception as e2:
+            print(f"❌ soundfile 로딩 실패: {e2}")
+            
+            # 방법 3: scipy로 로딩
+            try:
+                from scipy.io import wavfile
+                print("🔄 scipy.wavfile로 로딩 시도...")
+                
+                if isinstance(audio_path_or_bytes, (str, os.PathLike)):
+                    actual_sr, audio_data = wavfile.read(audio_path_or_bytes)
+                    # int16을 float32로 변환
+                    if audio_data.dtype == np.int16:
+                        audio_data = audio_data.astype(np.float32) / 32768.0
+                    elif audio_data.dtype == np.int32:
+                        audio_data = audio_data.astype(np.float32) / 2147483648.0
+                        
+                    # 리샘플링
+                    if actual_sr != sr:
+                        print(f"🔄 리샘플링: {actual_sr}Hz -> {sr}Hz")
+                        audio_data = librosa.resample(audio_data, orig_sr=actual_sr, target_sr=sr)
+                        actual_sr = sr
+                        
+                    print(f"✅ scipy 로딩 성공 - 샘플 레이트: {actual_sr}, 길이: {len(audio_data)}")
+                    return audio_data, actual_sr
+                else:
+                    raise ValueError("scipy는 바이트 스트림을 지원하지 않습니다")
+                    
+            except Exception as e3:
+                print(f"❌ scipy 로딩 실패: {e3}")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"오디오 파일을 로드할 수 없습니다. 지원되는 형식인지 확인해주세요. 오류: {str(e1)}"
+                )
+
 def analyze_audio_pitch(audio_data, sr):
     """오디오에서 피치 분석하여 최고음/최저음 추출"""
     try:
@@ -178,9 +262,12 @@ def analyze_audio_pitch(audio_data, sr):
         # 음성 분석을 위한 전처리
         # 1. 무음 구간 제거 (더 정확한 피치 분석을 위해)
         print("🔇 무음 구간 제거 중...")
-        non_silent_intervals = librosa.effects.split(audio_data, top_db=20)
-        if len(non_silent_intervals) == 0:
-            raise ValueError("오디오에서 음성을 찾을 수 없습니다. 무음 파일이거나 볼륨이 너무 작습니다.")
+        try:
+            non_silent_intervals = librosa.effects.split(audio_data, top_db=20)
+            if len(non_silent_intervals) == 0:
+                raise ValueError("오디오에서 음성을 찾을 수 없습니다. 무음 파일이거나 볼륨이 너무 작습니다.")
+        except Exception as split_error:
+            print(f"⚠️ 무음 제거 실패, 건너뛰기: {split_error}")
         
         # 2. 피치 추출 (더 가벼운 방법 사용)
         print("🎼 피치 추출 중...")
@@ -190,14 +277,44 @@ def analyze_audio_pitch(audio_data, sr):
         frame_length = 2048
         
         # 더 빠른 피치 추출을 위해 threshold 높임
-        pitches, magnitudes = librosa.piptrack(
-            y=audio_data, 
-            sr=sr, 
-            threshold=max(settings.PITCH_THRESHOLD, 0.2),  # 최소 0.2 이상
-            hop_length=hop_length,
-            fmin=80.0,  # 최저 주파수 제한 (인간 음성 범위)
-            fmax=2000.0  # 최고 주파수 제한
-        )
+        try:
+            pitches, magnitudes = librosa.piptrack(
+                y=audio_data, 
+                sr=sr, 
+                threshold=max(settings.PITCH_THRESHOLD, 0.2),  # 최소 0.2 이상
+                hop_length=hop_length,
+                fmin=80.0,  # 최저 주파수 제한 (인간 음성 범위)
+                fmax=2000.0  # 최고 주파수 제한
+            )
+        except Exception as piptrack_error:
+            print(f"❌ piptrack 실패: {piptrack_error}")
+            # 대안 방법: yin 알고리즘 사용
+            try:
+                print("🔄 YIN 알고리즘으로 피치 추출 시도...")
+                f0 = librosa.yin(audio_data, fmin=80, fmax=2000, sr=sr, hop_length=hop_length)
+                # 유효한 피치만 필터링
+                valid_f0 = f0[f0 > 0]
+                if len(valid_f0) < 10:
+                    raise ValueError("YIN으로도 충분한 피치를 찾을 수 없습니다")
+                
+                pitch_values = valid_f0.tolist()
+                print(f"✅ YIN으로 {len(pitch_values)}개 피치 추출 완료")
+                
+                # 극값 제거
+                pitch_values = sorted(pitch_values)
+                trim_count = max(1, len(pitch_values) // 20)
+                pitch_values = pitch_values[trim_count:-trim_count] if len(pitch_values) > trim_count * 2 else pitch_values
+                
+                lowest_hz = min(pitch_values)
+                highest_hz = max(pitch_values)
+                confidence = min(1.0, len(pitch_values) / len(f0))
+                
+                print(f"🎵 YIN 분석 결과: {lowest_hz:.1f}Hz ~ {highest_hz:.1f}Hz (신뢰도: {confidence:.2f})")
+                return lowest_hz, highest_hz, confidence
+                
+            except Exception as yin_error:
+                print(f"❌ YIN 알고리즘도 실패: {yin_error}")
+                raise ValueError("모든 피치 추출 방법이 실패했습니다. 더 선명한 음성으로 시도해주세요.")
         
         print(f"📊 피치 데이터 크기: {pitches.shape}")
         
@@ -348,7 +465,7 @@ async def analyze_vocal_range(
         try:
             print("=== Librosa 로딩 시도 ===")
             # mp3, wav -> librosa로 로딩 (샘플 레이트 제한)
-            audio_data, sr = librosa.load(io.BytesIO(audio_bytes), sr=22050)  # 고정 샘플 레이트로 메모리 절약
+            audio_data, sr = safe_librosa_load(io.BytesIO(audio_bytes), sr=22050)
             print(f"✅ Librosa 로딩 성공 - 샘플 레이트: {sr}, 데이터 길이: {len(audio_data)}")
             
             # 오디오 길이 체크
@@ -389,8 +506,8 @@ async def analyze_vocal_range(
                 
                 print(f"✅ FFmpeg 변환 성공")
                 
-                # 변환된 파일 로딩
-                audio_data, sr = librosa.load(temp_output_path, sr=22050)
+                # 변환된 파일 로딩 (안전한 방법 사용)
+                audio_data, sr = safe_librosa_load(temp_output_path, sr=22050)
                 print(f"✅ 변환된 파일 로딩 성공 - 샘플 레이트: {sr}, 데이터 길이: {len(audio_data)}")
                 
                 # 오디오 길이 체크
